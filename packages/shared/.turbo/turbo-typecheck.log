@@ -1,0 +1,4 @@
+
+> @analyzer/shared@1.0.0 typecheck D:\Projects\Analyzer MiniAPP\packages\shared
+> tsc -p tsconfig.json --noEmit
+

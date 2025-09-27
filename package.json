@@ -1,0 +1,31 @@
+{
+  "name": "analyzer-miniapp",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@9.7.0",
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "format": "prettier -w .",
+    "typecheck": "turbo typecheck",
+    "db:up": "docker compose up -d postgres redis",
+    "db:down": "docker compose down",
+    "db:logs": "docker compose logs -f postgres",
+    "postinstall": "turbo run postinstall --parallel",
+    "dev:web": "pnpm --filter @analyzer/web dev",
+    "dev:api": "pnpm --filter @analyzer/api dev",
+    "dev:bot": "pnpm --filter @analyzer/bot dev",
+    "ngrok:update": "node scripts/update-ngrok-url.js",
+    "ngrok:update-ps": "powershell -ExecutionPolicy Bypass -File scripts/update-ngrok-url.ps1",
+    "ngrok:set": "scripts\\update-ngrok.bat"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.4",
+    "@types/node-cron": "^3.0.11",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "prettier": "^3.3.3",
+    "turbo": "^2.1.1"
+  }
+}

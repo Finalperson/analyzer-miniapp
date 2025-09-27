@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analyzer Admin Panel</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); margin: 0; padding: 20px; min-height: 100vh; }
+        .container { max-width: 1000px; margin: 0 auto; background: white; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); padding: 30px; }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+        .spacer { flex: 1; }
+        .form-group { margin-bottom: 20px; }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #555;
+        }
+        input[type="text"], input[type="password"], select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: monospace;
+            box-sizing: border-box;
+        }
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .btn { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; padding: 12px 18px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: transform 0.2s; }
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .result { margin-top: 20px; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 14px; white-space: pre-wrap; }
+        .success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .loading { text-align: center; color: #667eea; }
+        .users-section { margin-top: 30px; padding-top: 20px; border-top: 2px solid #e1e5e9; }
+        .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+        .tag { padding: 4px 10px; background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 999px; font-size: 12px; font-weight: 600; color: #3730a3; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border-bottom: 1px solid #eee; padding: 10px; text-align: left; font-size: 13px; }
+        th { background: #fafafa; font-weight: 700; }
+        .muted { color: #666; font-size: 12px; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+        .badge.green { background: #d1fae5; color: #065f46; }
+        .badge.gray { background: #e5e7eb; color: #374151; }
+        .section-title { display: flex; align-items: center; justify-content: space-between; margin: 10px 0; }
+        .inline { display: inline-flex; gap: 8px; align-items: center; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🛠️ Analyzer Admin Panel</h1>
+
+        <div class="row" style="margin-bottom:12px;">
+            <div id="walletBox" class="inline">
+                <button class="btn" id="connectBtn" onclick="connectWallet()">Connect Wallet (MetaMask/Rabby)</button>
+                <span id="addr" class="muted"></span>
+                <span id="role" class="tag" style="display:none"></span>
+            </div>
+            <span class="spacer"></span>
+            <div class="inline" id="authActions" style="display:none;">
+                <button class="btn" onclick="logout()">Logout</button>
+            </div>
+        </div>
+
+        <div id="result"></div>
+
+        <div id="superAdminSection" style="display:none; margin-top:18px;">
+            <div class="section-title"><h3>Admin Management</h3></div>
+            <div class="row">
+                <div style="flex:2;">
+                    <label>Wallet Address</label>
+                    <input id="newAdminAddress" type="text" placeholder="0x...">
+                </div>
+                <div style="flex:1;">
+                    <label>Role</label>
+                    <select id="newAdminRole">
+                        <option value="ADMIN">ADMIN</option>
+                        <option value="SUPER_ADMIN">SUPER_ADMIN</option>
+                    </select>
+                </div>
+                <div style="align-self:flex-end;">
+                    <button class="btn" onclick="addAdmin()">Add / Update Admin</button>
+                </div>
+            </div>
+            <div style="margin-top:10px;">
+                <span class="muted">Super Admin wallet: 0x044d515048cCEFf46E60C565010C3A1763E2d640</span>
+            </div>
+        </div>
+
+        <div class="users-section" id="usersSection" style="display:none;">
+            <div class="section-title">
+                <h3>Users</h3>
+                <div class="toolbar">
+                    <span class="muted">Filter:</span>
+                    <button class="btn" onclick="loadUsersTable()">All</button>
+                    <button class="btn" onclick="loadUsersTable('true')">Has Subscription</button>
+                    <button class="btn" onclick="loadUsersTable('false')">No Subscription</button>
+                </div>
+            </div>
+            <div id="usersTableWrap" class="loading">Connect with an admin wallet to view users…</div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://127.0.0.1:8071';
+        let token = localStorage.getItem('admin_jwt') || '';
+        let myRole = null;
+        let myAddress = null;
+
+        async function connectWallet() {
+            if (!window.ethereum) { 
+                showResult('No wallet detected. Please install MetaMask or Rabby Wallet.', 'error'); 
+                return; 
+            }
+            
+            try {
+                showResult('Connecting to wallet...', 'loading');
+                
+                // Request account access
+                const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                if (!accounts || accounts.length === 0) {
+                    showResult('No accounts found. Please unlock your wallet.', 'error');
+                    return;
+                }
+                
+                const addr = accounts[0];
+                myAddress = addr;
+                document.getElementById('addr').textContent = short(addr);
+                
+                showResult('Getting login signature...', 'loading');
+                
+                // Get nonce from server
+                const nonceRes = await fetch(`${API_BASE}/admin/auth/nonce?address=${addr.toLowerCase()}`);
+                const nonceData = await nonceRes.json();
+                
+                if (!nonceRes.ok) {
+                    console.error('Nonce request failed:', {
+                        status: nonceRes.status,
+                        statusText: nonceRes.statusText,
+                        address: addr.toLowerCase(),
+                        response: nonceData
+                    });
+                    showResult('Server error: ' + (nonceData.error || 'Failed to get nonce'), 'error');
+                    return;
+                }
+                
+                const message = nonceData.message;
+                
+                // Request signature from user
+                const signature = await window.ethereum.request({ 
+                    method: 'personal_sign', 
+                    params: [ message, addr ] 
+                });
+                
+                showResult('Verifying signature...', 'loading');
+                
+                // Verify signature with server
+                const verifyRes = await fetch(`${API_BASE}/admin/auth/verify`, {
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ address: addr.toLowerCase(), signature })
+                });
+                
+                const data = await verifyRes.json();
+                
+                if (!verifyRes.ok) {
+                    console.error('Verify request failed:', {
+                        status: verifyRes.status,
+                        statusText: verifyRes.statusText,
+                        address: addr.toLowerCase(),
+                        response: data
+                    });
+                    showResult('Authentication failed: ' + (data.error || 'Invalid signature'), 'error');
+                    return;
+                }
+                
+                // Success - store token and update UI
+                token = data.token; 
+                myRole = data.role; 
+                localStorage.setItem('admin_jwt', token);
+                
+                document.getElementById('role').style.display = 'inline-block';
+                document.getElementById('role').textContent = myRole;
+                document.getElementById('connectBtn').textContent = 'Connected ✓';
+                document.getElementById('authActions').style.display = 'inline-flex';
+                
+                if (myRole === 'SUPER_ADMIN') {
+                    document.getElementById('superAdminSection').style.display = 'block';
+                }
+                
+                document.getElementById('usersSection').style.display = 'block';
+                
+                showResult(`Successfully connected as ${myRole}!`, 'success');
+                
+                // Load users table
+                loadUsersTable();
+                
+            } catch (e) {
+                console.error('Wallet connection error:', e);
+                showResult('Wallet connection failed: ' + e.message, 'error');
+            }
+        }
+
+        function logout() {
+            token = ''; myRole = null; myAddress = null; localStorage.removeItem('admin_jwt');
+            document.getElementById('addr').textContent = '';
+            document.getElementById('role').style.display = 'none';
+            document.getElementById('connectBtn').textContent = 'Connect Wallet (MetaMask/Rabby)';
+            document.getElementById('authActions').style.display = 'none';
+            document.getElementById('usersSection').style.display = 'none';
+            document.getElementById('superAdminSection').style.display = 'none';
+        }
+
+        async function addAdmin() {
+            if (myRole !== 'SUPER_ADMIN') { showResult('Only SUPER_ADMIN can add admins.', 'error'); return; }
+            const w = document.getElementById('newAdminAddress').value.trim();
+            const r = document.getElementById('newAdminRole').value;
+            if (!/^0x[a-fA-F0-9]{40}$/.test(w)) { showResult('Invalid wallet address', 'error'); return; }
+            const res = await fetch(`${API_BASE}/admin/admins`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ walletAddress: w, role: r })
+            });
+            const data = await res.json();
+            if (!res.ok) { showResult('Add admin failed: ' + (data.error || res.status), 'error'); return; }
+            showResult('Admin saved: ' + data.walletAddress + ' (' + data.role + ')', 'success');
+        }
+
+        async function loadUsersTable(hasSubscription) {
+            if (!token) {
+                showResult('Please connect wallet first.', 'error');
+                return;
+            }
+            
+            const wrap = document.getElementById('usersTableWrap');
+            wrap.innerHTML = '<div class="loading">Loading users from database…</div>';
+            
+            try {
+                const url = new URL(`${API_BASE}/admin/users-table`);
+                if (hasSubscription) url.searchParams.set('hasSubscription', hasSubscription);
+                
+                const res = await fetch(url, { 
+                    headers: { 'Authorization': `Bearer ${token}` } 
+                });
+                
+                const data = await res.json();
+                
+                if (!res.ok) { 
+                    if (res.status === 401) {
+                        logout();
+                        showResult('Session expired. Please reconnect.', 'error');
+                    } else {
+                        wrap.innerHTML = `<div class="error">Error: ${data.error || 'Failed to load users'}</div>`;
+                    }
+                    return; 
+                }
+                
+                if (!Array.isArray(data) || data.length === 0) { 
+                    wrap.innerHTML = '<div class="muted">No users found with the selected filter.</div>'; 
+                    return; 
+                }
+                
+                let html = '<table><thead><tr><th>Telegram ID</th><th>Username</th><th>Wallet</th><th>AP Balance</th><th>Premium</th><th>Subscription</th><th>Actions</th></tr></thead><tbody>';
+                
+                for (const u of data) {
+                    const sub = u.subscription || {};
+                    const active = sub.isActive ? '<span class="badge green">ACTIVE</span>' : '<span class="badge gray">INACTIVE</span>';
+                    const plan = sub.plan || 'monthly';
+                    const exp = sub.expiresAt ? new Date(sub.expiresAt).toLocaleDateString() : '-';
+                    
+                    html += `<tr>
+                        <td>${u.telegramId}</td>
+                        <td>${u.username || '-'}</td>
+                        <td class="muted">${short(u.walletAddress || '-')}</td>
+                        <td>${u.apBalance} AP</td>
+                        <td>${u.isPremium ? '<span class="badge green">Yes</span>' : '<span class="badge gray">No</span>'}</td>
+                        <td>${active} <div class="muted">${plan} ${exp !== '-' ? '/ ' + exp : ''}</div></td>
+                        <td>
+                            <div class="inline">
+                                <select id="plan-${u.id}" style="padding:4px;">
+                                    <option value="monthly" ${plan==='monthly'?'selected':''}>Monthly</option>
+                                    <option value="annual" ${plan==='annual'?'selected':''}>Annual</option>
+                                </select>
+                                <button class="btn" onclick="saveSub('${u.id}', true)" style="padding:4px 8px;">Activate</button>
+                                <button class="btn" onclick="saveSub('${u.id}', false)" style="padding:4px 8px; background:#dc3545;">Deactivate</button>
+                            </div>
+                        </td>
+                    </tr>`;
+                }
+                
+                html += '</tbody></table>';
+                wrap.innerHTML = html;
+                
+            } catch (error) {
+                wrap.innerHTML = `<div class="error">Network error: ${error.message}</div>`;
+            }
+        }
+
+        async function saveSub(userId, isActive) {
+            const plan = document.getElementById(`plan-${userId}`).value;
+            const res = await fetch(`${API_BASE}/admin/users/${userId}/subscription`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ isActive, plan, status: isActive ? 'active' : 'inactive' })
+            });
+            const data = await res.json();
+            if (!res.ok) { showResult('Update failed: ' + (data.error || res.status), 'error'); return; }
+            showResult('Subscription updated.', 'success');
+            loadUsersTable();
+        }
+
+        function showResult(message, type) { const resultDiv = document.getElementById('result'); resultDiv.className = `result ${type}`; resultDiv.textContent = message; }
+        function short(addr) { if (!addr) return '-'; return addr.slice(0, 6) + '...' + addr.slice(-4); }
+
+        // Auto-restore session if token exists
+        (async function init() {
+            if (token) {
+                try {
+                    showResult('Restoring session...', 'loading');
+                    const me = await fetch(`${API_BASE}/admin/me`, { 
+                        headers: { 'Authorization': `Bearer ${token}` } 
+                    });
+                    
+                    if (me.ok) {
+                        const d = await me.json();
+                        myRole = d.role; 
+                        myAddress = d.address; 
+                        
+                        document.getElementById('addr').textContent = short(myAddress);
+                        document.getElementById('role').style.display = 'inline-block';
+                        document.getElementById('role').textContent = myRole;
+                        document.getElementById('connectBtn').textContent = 'Connected ✓';
+                        document.getElementById('authActions').style.display = 'inline-flex';
+                        
+                        if (myRole === 'SUPER_ADMIN') {
+                            document.getElementById('superAdminSection').style.display = 'block';
+                        }
+                        
+                        document.getElementById('usersSection').style.display = 'block';
+                        showResult('Session restored successfully!', 'success');
+                        
+                        loadUsersTable();
+                    } else {
+                        localStorage.removeItem('admin_jwt');
+                        token = '';
+                        showResult('Session expired. Please connect wallet again.', 'error');
+                    }
+                } catch (e) {
+                    localStorage.removeItem('admin_jwt');
+                    token = '';
+                    showResult('Failed to restore session. Please connect wallet.', 'error');
+                }
+            } else {
+                showResult('Connect with your admin wallet to access the panel.', 'loading');
+            }
+        })();
+        
+    </script>
+</body>
+</html>

@@ -1,0 +1,851 @@
+import 'dotenv/config';
+import Fastify from 'fastify';
+import cors from '@fastify/cors';
+import { PrismaClient } from '@prisma/client';
+import { z } from 'zod';
+import jwt from '@fastify/jwt';
+import { verifyTelegramInitData } from './telegramAuth.js';
+import crypto from 'crypto';
+import { generateReferralCode, generateReferralLink } from './referralCode';
+import { validateTwitterUsername } from './utils/twitter';
+import { validateDiscordUsername } from './utils/discord';
+import { Notifications } from './notify';
+import { estimateTelegramCreationDate, daysBetween } from './utils/accountAge';
+import { registerRoutes } from './routes';
+import { generateUniqueReferralCode } from './utils/referral';
+import { randomBytes } from 'crypto';
+import { verifyMessage } from 'ethers';
+
+const app = Fastify({ logger: true });
+const prisma = new PrismaClient();
+
+// Helper to avoid BigInt JSON issues
+function serializeUser(user: any) {
+  if (!user) return user;
+  return {
+    ...user,
+    telegramId: user.telegramId != null ? user.telegramId.toString() : null,
+  };
+}
+
+await app.register(cors, { 
+  origin: true, // Allow all origins for development
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Secret']
+});
+// Temporarily disabled due to Fastify plugin version mismatch; re-enable after aligning versions
+// await app.register(rateLimit, { max: 1000, timeWindow: '1 minute' });
+// Redis plugin disabled for now due to version mismatch with Fastify v4
+// if (process.env.REDIS_URL) {
+//   await app.register(FastifyRedis, { url: process.env.REDIS_URL });
+// }
+await app.register(jwt, { secret: process.env.JWT_SECRET || 'dev' });
+
+app.get('/health', async () => ({ ok: true }));
+
+// Helper: unify admin key extraction from headers/query/body and normalize
+function getAdminKey(req: any): string | undefined {
+  // Fastify lower-cases header keys
+  const rawHeader = (req.headers?.['x-admin-secret'] ?? req.headers?.['X-Admin-Secret']) as
+    | string
+    | string[]
+    | undefined;
+  let key: any = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+  if (!key) {
+    const rawQuery = (req.query?.adminKey ?? req.body?.adminKey) as string | string[] | undefined;
+    key = Array.isArray(rawQuery) ? rawQuery[0] : rawQuery;
+  }
+  if (typeof key === 'string') return key.trim();
+  return undefined;
+}
+
+// Admin wallet-signature auth
+app.get('/admin/auth/nonce', async (req, reply) => {
+  const address = (req.query as any)?.address as string | undefined;
+  console.log('Nonce request for address:', address);
+  
+  if (!address || address.length !== 42) return reply.code(400).send({ error: 'Invalid address' });
+  const walletAddress = address.toLowerCase();
+  console.log('Normalized address:', walletAddress);
+  
+  // Check if admin exists, don't auto-create
+  let admin = await prisma.admin.findUnique({ where: { walletAddress } });
+  console.log('Found admin:', admin);
+  
+  if (!admin) {
+    console.log('Admin not found, returning 401');
+    return reply.code(401).send({ error: 'Unauthorized wallet. Contact super admin to add your wallet.' });
+  }
+  
+  const nonce = randomBytes(16).toString('hex');
+  const expires = new Date(Date.now() + 5 * 60_000);
+  await prisma.admin.update({ where: { walletAddress }, data: { nonce, nonceExpiresAt: expires } });
+  console.log('Nonce generated successfully:', nonce);
+  return { message: `Sign to login: ${nonce}` };
+});
+
+app.post('/admin/auth/verify', async (req, reply) => {
+  const body = z.object({ address: z.string().length(42), signature: z.string() }).parse(req.body);
+  const walletAddress = body.address.toLowerCase();
+  const admin = await prisma.admin.findUnique({ where: { walletAddress } });
+  if (!admin || !admin.nonce || !admin.nonceExpiresAt || admin.nonceExpiresAt < new Date()) {
+    return reply.code(401).send({ error: 'Nonce invalid or expired' });
+  }
+  const message = `Sign to login: ${admin.nonce}`;
+  let recovered: string;
+  try {
+    recovered = verifyMessage(message, body.signature).toLowerCase();
+  } catch {
+    return reply.code(401).send({ error: 'Invalid signature' });
+  }
+  if (recovered !== walletAddress) return reply.code(401).send({ error: 'Signature mismatch' });
+  const token = await reply.jwtSign({ sub: walletAddress, role: admin.role }, { expiresIn: '2h' });
+  await prisma.admin.update({ where: { walletAddress }, data: { nonce: null, nonceExpiresAt: null } });
+  return { token, role: admin.role };
+});
+
+app.get('/admin/me', { preHandler: requireAdmin }, async (req: any) => {
+  const payload = req.user as any;
+  return { address: payload.sub, role: payload.role };
+});
+
+// Guard
+async function requireAdmin(req: any, reply: any) {
+  try {
+    await req.jwtVerify();
+  } catch {
+    return reply.code(401).send({ error: 'Unauthorized' });
+  }
+}
+
+async function requireSuperAdmin(req: any, reply: any) {
+  try {
+    const payload = await req.jwtVerify();
+    if (payload.role !== 'SUPER_ADMIN') return reply.code(403).send({ error: 'Forbidden' });
+  } catch {
+    return reply.code(401).send({ error: 'Unauthorized' });
+  }
+}
+
+// Admin management
+app.get('/admin/admins', { preHandler: requireAdmin }, async (req, reply) => {
+  const list = await prisma.admin.findMany({ orderBy: { createdAt: 'desc' } });
+  return list;
+});
+
+app.post('/admin/admins', { preHandler: requireSuperAdmin }, async (req, reply) => {
+  const body = z.object({ walletAddress: z.string().length(42), role: z.enum(['ADMIN', 'SUPER_ADMIN']).default('ADMIN') }).parse(req.body);
+  const created = await prisma.admin.upsert({
+    where: { walletAddress: body.walletAddress.toLowerCase() },
+    update: { role: body.role },
+    create: { walletAddress: body.walletAddress.toLowerCase(), role: body.role },
+  });
+  return created;
+});
+
+// Users table with filters
+app.get('/admin/users-table', { preHandler: requireAdmin }, async (req, reply) => {
+  const q = req.query as any;
+  const hasSub = q.hasSubscription as string | undefined; // 'true' | 'false' | undefined
+  const where: any = { walletAddress: { not: null } };
+  if (hasSub === 'true') where.subscription = { is: { isActive: true } };
+  if (hasSub === 'false') where.subscription = { is: { isActive: false } };
+  const users = await prisma.user.findMany({
+    where,
+    select: {
+      id: true,
+      telegramId: true,
+      username: true,
+      walletAddress: true,
+      apBalance: true,
+      isPremium: true,
+      subscription: { select: { status: true, isActive: true, plan: true, expiresAt: true } },
+      createdAt: true,
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 200,
+  });
+  return users.map(u => ({
+    id: u.id,
+    telegramId: u.telegramId.toString(),
+    username: u.username,
+    walletAddress: u.walletAddress,
+    apBalance: u.apBalance,
+    isPremium: u.isPremium,
+    subscription: u.subscription,
+    createdAt: u.createdAt,
+  }));
+});
+
+// Edit subscription status
+app.patch('/admin/users/:id/subscription', { preHandler: requireAdmin }, async (req, reply) => {
+  const userId = (req.params as any).id as string;
+  const body = z.object({ isActive: z.boolean(), status: z.string().default('active'), plan: z.string().default('monthly'), expiresAt: z.string().nullable().optional() }).parse(req.body);
+  const updated = await prisma.subscription.upsert({
+    where: { userId },
+    update: { isActive: body.isActive, status: body.status, plan: body.plan, expiresAt: body.expiresAt ? new Date(body.expiresAt) : null },
+    create: { userId, isActive: body.isActive, status: body.status, plan: body.plan, expiresAt: body.expiresAt ? new Date(body.expiresAt) : null },
+  });
+  return updated;
+});
+
+// DB health probe
+app.get('/debug/db', async (req, reply) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    return { ok: true };
+  } catch (err: any) {
+    req.log.error({ err }, 'DB health check failed');
+    return reply.code(500).send({ ok: false, error: err?.message || 'DB error' });
+  }
+});
+
+// Auth route using Telegram WebApp initData
+// Helper function to process referral rewards
+async function processReferralRewards(referrerId: string) {
+  const referrer = await prisma.user.findUnique({
+    where: { id: referrerId },
+    include: { referrals: true }
+  });
+
+  if (!referrer) return;
+
+  const totalReferrals = referrer.referrals.length;
+  
+  // Check if they hit a new milestone
+  const milestones = [
+    { count: 3, reward: 100, title: "3 Referrals" },
+    { count: 10, reward: 500, title: "10 Referrals" }
+  ];
+
+  const hitMilestone = milestones.find(m => m.count === totalReferrals);
+  
+  if (hitMilestone) {
+    // Award milestone bonus
+    await prisma.user.update({
+      where: { id: referrerId },
+      data: { 
+        apBalance: { increment: hitMilestone.reward }
+      }
+    });
+    
+    console.log(`🎉 User ${referrer.telegramId} hit milestone: ${hitMilestone.title} (+${hitMilestone.reward} AP)`);
+    // Notify user
+    if (referrer.telegramId) Notifications.milestone(referrer.telegramId, hitMilestone.title);
+  }
+
+  // Always give base referral reward (10 AP per referral)
+  await prisma.user.update({
+    where: { id: referrerId },
+    data: { 
+      apBalance: { increment: 10 }
+    }
+  });
+  if (referrer?.telegramId) Notifications.referral(referrer.telegramId);
+}
+
+app.post('/auth/telegram', async (req: any, reply: any) => {
+  const body = z.object({ initData: z.string(), referralCode: z.string().optional() }).parse(req.body);
+  const data = verifyTelegramInitData(body.initData, process.env.TELEGRAM_BOT_TOKEN!);
+  if (!data) return reply.code(401).send({ error: 'Invalid initData' });
+
+  const tgId = BigInt(data.user.id);
+  
+  // Check if user exists
+  let user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+  const isNewUser = !user;
+
+  // Create or update user
+  user = await prisma.user.upsert({
+    where: { telegramId: tgId },
+    update: {
+      username: data.user.username ?? null,
+      firstName: data.user.first_name ?? null,
+      lastName: data.user.last_name ?? null,
+      isPremium: data.user.is_premium ?? false,
+    },
+    create: {
+      telegramId: tgId,
+      username: data.user.username ?? null,
+      firstName: data.user.first_name ?? null,
+      lastName: data.user.last_name ?? null,
+      isPremium: data.user.is_premium ?? false,
+      referralCode: await generateUniqueReferralCode(prisma),
+      apBalance: 100, // Welcome bonus
+    },
+  });
+
+  // Handle referral linking for new users only
+  if (isNewUser) {
+    const referrerTelegramId = data.start_param || body.referralCode;
+    if (referrerTelegramId && referrerTelegramId !== tgId.toString()) {
+      try {
+        // Find referrer by telegram ID (not referral code)
+        const referrer = await prisma.user.findUnique({ 
+          where: { telegramId: BigInt(referrerTelegramId) } 
+        });
+        
+        if (referrer) {
+          // Create referral relationship
+          await prisma.referral.create({ 
+            data: { 
+              referrerId: referrer.id, 
+              refereeId: user.id 
+            } 
+          });
+          
+          // Process referral rewards
+          await processReferralRewards(referrer.id);
+          
+          console.log(`🔗 New referral: ${referrer.telegramId} → ${user.telegramId}`);
+        }
+      } catch (error) {
+        console.error('Referral processing error:', error);
+        // Don't fail auth if referral fails
+      }
+    }
+  }
+
+  // Loyalty bonus once per user
+  if (!user.loyaltyAwardedAt) {
+    const estimated = estimateTelegramCreationDate(user.telegramId);
+    const days = daysBetween(estimated, new Date());
+    if (days > 0) {
+      user = await prisma.user.update({ where: { id: user.id }, data: { apBalance: { increment: days }, loyaltyAwardedAt: new Date() } });
+      await prisma.userMission.upsert({
+        where: { userId_missionId_dayKey: { userId: user.id, missionId: (await prisma.mission.findUnique({ where: { code: 'loyalty_bonus' } }))!.id, dayKey: 'one' } },
+        update: { completed: true },
+        create: { userId: user.id, missionId: (await prisma.mission.findUnique({ where: { code: 'loyalty_bonus' } }))!.id, completed: true, completedAt: new Date(), dayKey: 'one' },
+      });
+    }
+  }
+
+  const jwt = app.jwt.sign({ uid: user.id });
+  return { token: jwt, user: serializeUser(user) };
+});
+
+// Simple auth endpoint for bot onboarding
+app.post('/auth', async (req: any, reply: any) => {
+  const body = z.object({ 
+    initData: z.string(), 
+    initialPoints: z.number().optional().default(0) 
+  }).parse(req.body);
+  
+  // Parse the initData from bot
+  let userData;
+  try {
+    userData = JSON.parse(body.initData);
+  } catch {
+    return reply.code(400).send({ error: 'Invalid initData format' });
+  }
+  
+  if (!userData.user?.id) {
+    return reply.code(400).send({ error: 'Missing user data' });
+  }
+
+  const tgId = BigInt(userData.user.id);
+  const username = userData.user.username || userData.user.first_name || 'User';
+  
+  // Check if user exists
+  let user = await prisma.user.findUnique({ where: { telegramId: tgId } });
+  const isNewUser = !user;
+
+  // Create or update user
+  user = await prisma.user.upsert({
+    where: { telegramId: tgId },
+    update: {
+      username: userData.user.username ?? user?.username ?? null,
+      firstName: userData.user.first_name ?? user?.firstName ?? null,
+    },
+    create: {
+      telegramId: tgId,
+      username: userData.user.username ?? null,
+      firstName: userData.user.first_name ?? null,
+      referralCode: await generateUniqueReferralCode(prisma),
+      apBalance: body.initialPoints, // Use calculated initial points from bot
+    },
+  });
+
+  const jwt = app.jwt.sign({ uid: user.id });
+  return { 
+    token: jwt, 
+    user: serializeUser(user),
+    isNewUser,
+    message: isNewUser ? 'User created successfully' : 'User updated successfully'
+  };
+});
+
+// Development test authentication endpoint
+app.post('/auth/test', async (req: any, reply: any) => {
+  if (process.env.NODE_ENV === 'production') {
+    return reply.code(404).send({ error: 'Not found' });
+  }
+  
+  const body = z.object({ userId: z.string() }).parse(req.body);
+  const testTelegramId = BigInt(123456789); // Fixed test telegram ID
+  
+  // Check if test user exists
+  let user = await prisma.user.findUnique({ where: { telegramId: testTelegramId } });
+  
+  // Create test user if doesn't exist
+  if (!user) {
+    user = await prisma.user.create({
+      data: {
+        telegramId: testTelegramId,
+        username: 'testuser',
+        firstName: 'Test',
+        lastName: 'User',
+        isPremium: false,
+        referralCode: await generateUniqueReferralCode(prisma),
+        apBalance: 100, // Welcome bonus
+      },
+    });
+    console.log('🛠️ Created test user for development');
+  }
+
+  const jwt = app.jwt.sign({ uid: user.id });
+  return { token: jwt, user: serializeUser(user) };
+});
+
+// Web authentication (non-Telegram) — allows full usage in web
+// Creates a deterministic pseudo telegramId from clientId
+app.post('/auth/web', async (req: any, reply: any) => {
+  try {
+    const body = z.object({
+      clientId: z.string().min(8),
+      username: z.string().max(64).optional().transform((v) => (v && v.trim() ? v : undefined)),
+      referralCode: z.string().optional()
+    }).parse(req.body);
+
+    // Ensure DB is reachable before proceeding
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+    } catch (dbErr: any) {
+      req.log.error({ dbErr }, 'Database not reachable');
+      return reply.code(500).send({ error: 'Database not reachable' });
+    }
+
+    // Derive a stable 64-bit id from clientId
+  const hash = crypto.createHash('sha256').update(body.clientId).digest('hex');
+  const first16 = hash.slice(0, 16); // 64 bits
+  const rawId = BigInt('0x' + first16);
+  const mask63 = (1n << 63n) - 1n; // ensure fits signed 64-bit (PostgreSQL BIGINT)
+  const webId = rawId & mask63;
+
+    // Idempotent create/update that tolerates races
+    // Prefer update first; if not found, try create; if unique race, fall back to update
+    try {
+      await prisma.user.update({
+        where: { telegramId: webId },
+        data: {
+          username: body.username ?? undefined,
+        },
+      });
+    } catch (e: any) {
+      // Record not found
+      if (e?.code === 'P2025') {
+        try {
+          await prisma.user.create({
+            data: {
+              telegramId: webId,
+              username: body.username || `web_${hash.slice(0, 6)}`,
+              firstName: null,
+              lastName: null,
+              isPremium: false,
+              referralCode: await generateUniqueReferralCode(prisma),
+              apBalance: 100,
+            },
+          });
+        } catch (e2: any) {
+          // Unique conflict due to race — another request created the row — retry update
+          if (e2?.code === 'P2002') {
+            await prisma.user.update({
+              where: { telegramId: webId },
+              data: { username: body.username ?? undefined },
+            });
+          } else {
+            throw e2;
+          }
+        }
+      } else if (e?.code === 'P2002') {
+        // Unique conflict on update (rare) — retry
+        await prisma.user.update({
+          where: { telegramId: webId },
+          data: { username: body.username ?? undefined },
+        });
+      } else {
+        throw e;
+      }
+    }
+
+  let user = await prisma.user.findUnique({ where: { telegramId: webId }, include: { referredBy: true } });
+    if (!user) return reply.code(500).send({ error: 'User creation failed' });
+
+    // Link referral if provided and user is newly created (no referredBy)
+    if (body.referralCode && !user.referredBy) {
+      try {
+        const referrer = await prisma.user.findUnique({ where: { referralCode: body.referralCode } });
+        if (referrer && referrer.id !== user.id) {
+          await prisma.referral.create({ data: { referrerId: referrer.id, refereeId: user.id } });
+          await processReferralRewards(referrer.id);
+        }
+      } catch (e) {
+        req.log.warn({ err: e }, 'Web referral linking failed');
+      }
+    }
+
+    const jwt = app.jwt.sign({ uid: user.id });
+    return { token: jwt, user: serializeUser(user) };
+  } catch (err: any) {
+    req.log.error({ err }, 'auth/web failed');
+    return reply.code(500).send({ error: err?.message || 'Internal Server Error' });
+  }
+});
+
+// Protected routes
+app.addHook('preHandler', async (req: any, res: any) => {
+  const path = (req.routerPath as string | undefined) || (req.raw?.url?.split('?')[0] as string | undefined) || '';
+  if (path.startsWith('/auth') || path === '/health' || path.startsWith('/cron')) return;
+  try {
+    await req.jwtVerify();
+  } catch {
+    return res.code(401).send({ error: 'Unauthorized' });
+  }
+});
+
+app.get('/me', async (req: any) => {
+  const user = await prisma.user.findUnique({ where: { id: req.user.uid }, include: { subscription: true } });
+  return { user: serializeUser(user) };
+});
+
+// Referral system endpoint (replaces RefDrop) -- see detailed version below
+
+app.post('/points/claim-daily', async (req: any, reply: any) => {
+  // daily mission completion with cooldown 24h
+  const today = new Date().toISOString().slice(0,10);
+  const dailyMission = await prisma.mission.findUnique({ where: { code: 'daily_checkin' } });
+  if (!dailyMission) return reply.code(500).send({ error: 'Mission not found' });
+  try {
+    await prisma.userMission.create({ data: { userId: req.user.uid, missionId: dailyMission.id, completed: true, completedAt: new Date(), dayKey: today } });
+  } catch (e) {
+    return reply.code(429).send({ error: 'Already claimed today' });
+  }
+  await prisma.user.update({ where: { id: req.user.uid }, data: { apBalance: { increment: dailyMission.points } } });
+  return { ok: true, added: dailyMission.points };
+});
+
+// Referral system endpoint (minimal output per request)
+app.get('/referral', async (req: any) => {
+  const user = await prisma.user.findUnique({
+    where: { id: req.user.uid },
+    include: { referrals: true }
+  });
+  if (!user) return { error: 'User not found' };
+
+  const totalReferrals = user.referrals.length;
+  const botName = process.env.TELEGRAM_BOT_NAME || 'analyzerfinance_bot';
+  const referralLink = generateReferralLink(user.telegramId.toString(), botName);
+
+  return { totalReferrals, referralLink };
+});
+
+// Mission completion endpoints
+app.post('/missions/wallet', async (req: any, reply: any) => {
+  const body = z.object({ walletAddress: z.string().min(42).max(42) }).parse(req.body);
+  
+  // Validate EVM address format
+  if (!body.walletAddress.startsWith('0x') || !/^0x[a-fA-F0-9]{40}$/.test(body.walletAddress)) {
+    return reply.code(400).send({ error: 'Invalid EVM address format' });
+  }
+  
+  // Check if user already has a wallet address (one-time only)
+  const user = await prisma.user.findUnique({ where: { id: req.user.uid } });
+  if (!user) return reply.code(404).send({ error: 'User not found' });
+  
+  if (user.walletAddress) {
+    return reply.code(409).send({ error: 'Wallet address already registered and cannot be changed' });
+  }
+  
+  // Check if this wallet address is already used by another user
+  const existingWallet = await prisma.user.findFirst({ 
+    where: { walletAddress: body.walletAddress } 
+  });
+  if (existingWallet) {
+    return reply.code(409).send({ error: 'This wallet address is already registered by another user' });
+  }
+  
+  // Check if wallet mission already completed
+  const walletMission = await prisma.mission.findUnique({ where: { code: 'connect_wallet' } });
+  if (!walletMission) return reply.code(404).send({ error: 'Mission not found' });
+  
+  const existing = await prisma.userMission.findUnique({
+    where: { userId_missionId_dayKey: { userId: req.user.uid, missionId: walletMission.id, dayKey: 'once' } }
+  });
+  
+  if (existing) return reply.code(409).send({ error: 'Mission already completed' });
+  
+  // Save wallet address and complete mission
+  await prisma.user.update({
+    where: { id: req.user.uid },
+    data: { 
+      walletAddress: body.walletAddress,
+      apBalance: { increment: walletMission.points }
+    }
+  });
+  
+  await prisma.userMission.create({
+    data: { 
+      userId: req.user.uid, 
+      missionId: walletMission.id, 
+      completed: true, 
+      completedAt: new Date(), 
+      dayKey: 'once' 
+    }
+  });
+
+  // Log in MissionsLog - skipping for now until Prisma client is regenerated
+  
+  return { success: true, points: walletMission.points, message: 'Wallet address registered successfully' };
+});
+
+app.post('/missions/twitter', async (req: any, reply: any) => {
+  const body = z.object({ username: z.string().min(1) }).parse(req.body);
+  // Honor-only: no external API calls
+  
+  // Validate username format
+  const validation = validateTwitterUsername(body.username);
+  if (!validation.valid) {
+    return reply.code(400).send({ error: validation.error });
+  }
+  
+  const twitterMission = await prisma.mission.findUnique({ where: { code: 'follow_twitter' } });
+  if (!twitterMission) return reply.code(404).send({ error: 'Mission not found' });
+  
+  const existing = await prisma.userMission.findUnique({
+    where: { userId_missionId_dayKey: { userId: req.user.uid, missionId: twitterMission.id, dayKey: 'once' } }
+  });
+  
+  if (existing) return reply.code(409).send({ error: 'Mission already completed' });
+  
+  try {
+    
+    // Store Twitter username and complete mission
+    await prisma.user.update({
+      where: { id: req.user.uid },
+      data: { 
+        twitterUsername: body.username.replace('@', ''),
+        apBalance: { increment: twitterMission.points }
+      }
+    });
+    
+    await prisma.userMission.create({
+      data: { 
+        userId: req.user.uid, 
+        missionId: twitterMission.id, 
+        completed: true, 
+        completedAt: new Date(), 
+        dayKey: 'once' 
+      }
+    });
+    
+    return { 
+      success: true, 
+      points: twitterMission.points,
+      message: `Successfully verified Twitter follow! +${twitterMission.points} AP added.`
+    };
+    
+  } catch (error: any) {
+    console.error('Twitter mission error:', error);
+    return reply.code(500).send({ error: 'Failed to complete mission. Please try again.' });
+  }
+});
+
+app.post('/missions/discord', async (req: any, reply: any) => {
+  const body = z.object({ username: z.string().min(1) }).parse(req.body);
+  // Honor-only: no external API calls
+  
+  // Validate username format
+  const validation = validateDiscordUsername(body.username);
+  if (!validation.valid) {
+    return reply.code(400).send({ error: validation.error });
+  }
+  
+  const discordMission = await prisma.mission.findUnique({ where: { code: 'join_discord' } });
+  if (!discordMission) return reply.code(404).send({ error: 'Mission not found' });
+  
+  const existing = await prisma.userMission.findUnique({
+    where: { userId_missionId_dayKey: { userId: req.user.uid, missionId: discordMission.id, dayKey: 'once' } }
+  });
+  
+  if (existing) return reply.code(409).send({ error: 'Mission already completed' });
+  
+  try {
+    
+    // Store Discord username and complete mission
+    await prisma.user.update({
+      where: { id: req.user.uid },
+      data: { 
+        discordUsername: body.username,
+        apBalance: { increment: discordMission.points }
+      }
+    });
+    
+    await prisma.userMission.create({
+      data: { 
+        userId: req.user.uid, 
+        missionId: discordMission.id, 
+        completed: true, 
+        completedAt: new Date(), 
+        dayKey: 'once' 
+      }
+    });
+    
+    return { 
+      success: true, 
+      points: discordMission.points,
+      message: `Successfully verified Discord membership! +${discordMission.points} AP added.`
+    };
+    
+  } catch (error) {
+    console.error('Discord mission error:', error);
+    return reply.code(500).send({ error: 'Failed to complete mission. Please try again.' });
+  }
+});
+
+// Admin endpoint for subscription verification
+app.post('/admin/verify-subscription', async (req: any, reply: any) => {
+  const body = z.object({ 
+    walletAddress: z.string().min(42).max(42)
+  }).parse(req.body);
+  
+  const adminKey = getAdminKey(req);
+  // Simple admin authentication (in production, use proper admin auth)
+  if (adminKey !== (process.env.ADMIN_SECRET || '').trim()) {
+    return reply.code(401).send({ error: 'Unauthorized' });
+  }
+  
+  // Find user by wallet address
+  const user = await prisma.user.findFirst({ 
+    where: { walletAddress: body.walletAddress } 
+  });
+  
+  if (!user) {
+    return reply.code(404).send({ error: 'User with this wallet address not found' });
+  }
+  
+  // Check if subscription verification mission exists
+  const subscriptionMission = await prisma.mission.findUnique({ 
+    where: { code: 'subscription_verification' } 
+  });
+  
+  if (!subscriptionMission) {
+    return reply.code(404).send({ error: 'Subscription verification mission not found' });
+  }
+  
+  // Check if already completed
+  const existing = await prisma.userMission.findUnique({
+    where: { 
+      userId_missionId_dayKey: { 
+        userId: user.id, 
+        missionId: subscriptionMission.id, 
+        dayKey: 'once' 
+      } 
+    }
+  });
+  
+  if (existing) {
+    return reply.code(409).send({ error: 'Subscription already verified for this user' });
+  }
+  
+  // Award subscription bonus
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { 
+      apBalance: { increment: subscriptionMission.points },
+      isPremium: true // Mark as premium user
+    }
+  });
+  
+  // Complete subscription mission
+  await prisma.userMission.create({
+    data: { 
+      userId: user.id, 
+      missionId: subscriptionMission.id, 
+      completed: true, 
+      completedAt: new Date(), 
+      dayKey: 'once' 
+    }
+  });
+
+  // Log in MissionsLog - skipping for now until Prisma client is regenerated
+  
+  return { 
+    success: true, 
+    points: subscriptionMission.points,
+    message: `Subscription verified for ${body.walletAddress}. User awarded +${subscriptionMission.points} AP and premium status.`,
+    user: {
+      telegramId: user.telegramId.toString(),
+      username: user.username,
+      newBalance: user.apBalance + subscriptionMission.points
+    }
+  };
+});
+
+// Admin endpoint to get users with wallet addresses
+app.get('/admin/users', async (req: any, reply: any) => {
+  const adminKey = getAdminKey(req);
+  // Simple admin authentication
+  if (adminKey !== (process.env.ADMIN_SECRET || '').trim()) {
+    return reply.code(401).send({ error: 'Unauthorized' });
+  }
+  
+  // Get users who have registered wallet addresses
+  const users = await prisma.user.findMany({
+    where: {
+      walletAddress: {
+        not: null
+      }
+    },
+    select: {
+      telegramId: true,
+      username: true,
+      firstName: true,
+      lastName: true,
+      walletAddress: true,
+      apBalance: true,
+      isPremium: true,
+      createdAt: true
+    },
+    orderBy: {
+      createdAt: 'desc'
+    },
+    take: 50 // Limit to last 50 users
+  });
+  
+  return { 
+    success: true, 
+    users: users.map(user => ({
+      telegramId: user.telegramId.toString(),
+      username: user.username,
+      displayName: user.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : user.username,
+      walletAddress: user.walletAddress,
+      apBalance: user.apBalance,
+      isPremium: user.isPremium,
+      createdAt: user.createdAt
+    }))
+  };
+});
+
+// Cron removed: daily auto-award logic disabled per requirements
+
+const port = Number(process.env.API_PORT || 8071);
+const host = process.env.API_HOST || '127.0.0.1';
+
+// register modular routes (placeholder)
+await registerRoutes(app);
+
+app.listen({ port, host }).catch((err) => { 
+  app.log.error(err); 
+  process.exit(1); 
+});

@@ -1,0 +1,42 @@
+{
+  "name": "@analyzer/web",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 8070",
+    "build": "next build",
+    "start": "next start -p 8070",
+    "lint": "next lint",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@analyzer/shared": "workspace:*",
+    "@prisma/client": "^5.20.0",
+    "@tanstack/react-query": "^5.51.1",
+    "@wagmi/connectors": "^5.9.9",
+    "@wagmi/core": "^2.20.3",
+    "clsx": "^2.1.1",
+    "jsonwebtoken": "^9.0.2",
+    "lucide-react": "^0.441.0",
+    "next": "^14.2.6",
+    "prisma": "^5.20.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "telegraf": "^4.16.3",
+    "viem": "^2.37.5",
+    "wagmi": "^2.16.9",
+    "zustand": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^22.18.3",
+    "@types/react": "^18.3.24",
+    "@types/react-dom": "^18.3.7",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^9.9.0",
+    "eslint-config-next": "^14.2.6",
+    "postcss": "^8.4.45",
+    "tailwindcss": "^3.4.10",
+    "typescript": "^5.5.4"
+  }
+}

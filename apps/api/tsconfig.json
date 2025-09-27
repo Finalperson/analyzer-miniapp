@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "baseUrl": ".",
+  "types": ["node"],
+  "allowImportingTsExtensions": true,
+    "paths": {
+      "@analyzer/shared/*": ["../../packages/shared/src/*"]
+    }
+  },
+  "include": ["src", "prisma"]
+}
