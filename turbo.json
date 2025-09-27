@@ -3,7 +3,19 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", ".next/**"]
+      "outputs": ["dist/**", ".next/**"],
+      "env": [
+        "JWT_SECRET",
+        "TELEGRAM_BOT_TOKEN", 
+        "TELEGRAM_BOT_NAME",
+        "PUBLIC_WEBAPP_URL",
+        "NEXT_PUBLIC_API_URL",
+        "NEXT_PUBLIC_TWITTER_URL",
+        "NEXT_PUBLIC_DISCORD_URL", 
+        "NEXT_PUBLIC_WEBSITE_URL",
+        "HONOR_MODE_SOCIAL",
+        "DATABASE_URL"
+      ]
     },
     "dev": {
       "cache": false,

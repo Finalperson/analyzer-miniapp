@@ -1,70 +1,70 @@
 # 🚀 Quick Start Guide
 
-## ترتیب اجرای پروژه (فارسی)
+## Project Setup Order (English)
 
-### مرحله 1: نصب و تنظیمات اولیه
+### Step 1: Installation & Initial Setup
 ```bash
-# کلون پروژه
+# Clone project
 git clone <your-repo>
 cd Analyzer-MiniAPP
 
-# نصب dependencies
+# Install dependencies
 pnpm install
 
-# کپی کردن فایل‌های environment
+# Copy environment files
 cp .env.example .env
 cp apps/api/.env.example apps/api/.env  
 cp apps/web/.env.example apps/web/.env
 cp apps/bot/.env.example apps/bot/.env
 ```
 
-### مرحله 2: تنظیم دیتابیس
+### Step 2: Database Setup
 ```bash
-# اجرای PostgreSQL و Redis
+# Run PostgreSQL and Redis
 pnpm db:up
 
-# اجرای migrations
+# Run migrations
 pnpm --filter @analyzer/api db:dev
 
-# seed کردن دیتا
+# Seed data
 pnpm --filter @analyzer/api db:seed
 ```
 
-### مرحله 3: تنظیم ngrok (ضروری!)
+### Step 3: ngrok Setup (Essential!)
 ```bash
-# نصب ngrok از سایت: https://ngrok.com/download
-# اجرای ngrok
+# Install ngrok from: https://ngrok.com/download
+# Run ngrok
 ngrok http 8070
 ```
-**مهم**: URL حاصل (مثل `https://abc123.ngrok-free.app`) را در `apps/bot/.env` در متغیر `WEBAPP_URL` قرار دهید.
+**Important**: Copy the resulting URL (like `https://abc123.ngrok-free.app`) and put it in `apps/bot/.env` in the `WEBAPP_URL` variable.
 
-### مرحله 4: اجرای سرورها (4 ترمینال)
+### Step 4: Run Servers (4 terminals)
 
-**ترمینال 1 - API:**
+**Terminal 1 - API:**
 ```bash
 pnpm --filter @analyzer/api dev
 ```
 
-**ترمینال 2 - Web App:**
+**Terminal 2 - Web App:**
 ```bash
 pnpm --filter @analyzer/web dev  
 ```
 
-**ترمینال 3 - Bot:**
+**Terminal 3 - Bot:**
 ```bash
 pnpm --filter @analyzer/bot dev
 ```
 
-**ترمینال 4 - ngrok:**
+**Terminal 4 - ngrok:**
 ```bash
 ngrok http 8070
 ```
 
-### مرحله 5: تست در تلگرام
-1. به ربات تلگرام خود پیام دهید
-2. دستور `/start` را ارسال کنید  
-3. روی "Launch WebApp" کلیک کنید
-4. از قابلیت‌های mini app استفاده کنید!
+### Step 5: Test in Telegram
+1. Message your Telegram bot
+2. Send the `/start` command  
+3. Click "Launch WebApp"
+4. Use the mini app features!
 
 ---
 
@@ -99,15 +99,15 @@ WEBAPP_URL="https://your-ngrok-url.ngrok-free.app"
 
 ---
 
-## 🐛 رفع مشکلات رایج
+## 🐛 Common Troubleshooting
 
-### خطای "WebApp requires HTTPS"
-- مطمئن شوید ngrok در حال اجرا است
-- URL ngrok را در `apps/bot/.env` قرار داده‌اید
+### "WebApp requires HTTPS" Error
+- Make sure ngrok is running
+- Put ngrok URL in `apps/bot/.env`
 
-### خطای اتصال به دیتابیس
+### Database Connection Error
 ```bash
-# چک کردن وضعیت Docker
+# Check Docker status
 docker ps
 
 # راه‌اندازی مجدد

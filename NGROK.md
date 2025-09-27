@@ -1,33 +1,33 @@
 # 🔗 ngrok URL Management Guide
 
-## مشکل: URL ngrok هر بار عوض می‌شود
+## Problem: ngrok URL Changes Every Time
 
-هر دفعه که ngrok را restart می‌کنید، URL جدیدی می‌دهد که باید در bot configuration بروزرسانی شود.
+Each time you restart ngrok, it gives a new URL that needs to be updated in bot configuration.
 
 ---
 
-## راه حل‌های مختلف:
+## Different Solutions:
 
-### 1. 🎯 **ngrok Domain ثابت (بهترین راه حل)**
+### 1. 🎯 **Static ngrok Domain (Best Solution)**
 
-اگر اکانت ngrok دارید:
+If you have an ngrok account:
 
 ```bash
-# ثبت domain ثابت در ngrok dashboard
-# مثال: analyzer-miniapp.ngrok.io
+# Register static domain in ngrok dashboard
+# Example: analyzer-miniapp.ngrok.io
 
-# اجرای ngrok با domain ثابت
+# Run ngrok with static domain
 ngrok http 8070 --domain=analyzer-miniapp.ngrok.io
 ```
 
-مزایا:
-- ✅ URL هرگز عوض نمی‌شود
-- ✅ نیازی به بروزرسانی نیست
-- ✅ حرفه‌ای‌تر است
+Advantages:
+- ✅ URL never changes
+- ✅ No updates needed
+- ✅ More professional
 
 ---
 
-### 2. 🤖 **اسکریپت خودکار (Node.js)**
+### 2. 🤖 **Automatic Script (Node.js)**
 
 ```bash
 # اجرای اسکریپت خودکار

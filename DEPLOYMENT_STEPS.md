@@ -1,47 +1,47 @@
-# 🚀 GitHub & Vercel Deployment
+# 🚀 GitHub & Vercel Deployment Guide
 
-## مرحله 1: GitHub Repository Setup
+## Step 1: GitHub Repository Setup
 
-### 1. GitHub Repository بساز:
-1. برو به: https://github.com
-2. کلیک روی "New Repository" 
+### 1. Create GitHub Repository:
+1. Go to: https://github.com
+2. Click "New Repository" 
 3. Repository name: `analyzer-miniapp`
 4. Description: `Analyzer Telegram Mini App - Web3 Mission Platform`
-5. Public انتخاب کن
-6. **مهم:** README.md و .gitignore اضافه نکن (چون داریم)
-7. کلیک روی "Create Repository"
+5. Select Public
+6. **Important:** Don't add README.md or .gitignore (we already have them)
+7. Click "Create Repository"
 
 ### 2. Local Git Setup:
 ```powershell
-# توی پروژه ات این commands رو اجرا کن:
+# Run these commands in your project directory:
 
-# Git repository initialize کن
+# Initialize Git repository
 git init
 
-# همه فایل‌ها رو add کن
+# Add all files
 git add .
 
-# اولین commit
+# First commit
 git commit -m "Initial commit: Analyzer MiniApp with Vercel deployment ready"
 
-# GitHub repository رو به عنوان origin اضافه کن
-# توجه: YOUR_USERNAME رو عوض کن!
+# Add GitHub repository as origin
+# Note: Replace YOUR_USERNAME with your GitHub username!
 git remote add origin https://github.com/YOUR_USERNAME/analyzer-miniapp.git
 
-# Push کن
+# Push to GitHub
 git push -u origin main
 ```
 
-## مرحله 2: Vercel Deployment
+## Step 2: Vercel Deployment
 
 ### 1. Vercel Account:
-1. برو به: https://vercel.com
-2. با GitHub login کن
-3. Access به repositories بده
+1. Go to: https://vercel.com
+2. Login with GitHub
+3. Grant access to repositories
 
 ### 2. Import Project:
-1. در Vercel dashboard روی "New Project" کلیک کن
-2. GitHub repository `analyzer-miniapp` رو انتخاب کن
+1. In Vercel dashboard, click "New Project"
+2. Select GitHub repository `analyzer-miniapp`
 3. Configure project settings:
    - **Framework Preset**: Next.js
    - **Root Directory**: `apps/web`
@@ -50,10 +50,10 @@ git push -u origin main
    - **Output Directory**: `.next` (default)
 
 ### 3. Environment Variables:
-اینها رو در Vercel project settings اضافه کن:
+Add these in Vercel project settings:
 
 ```env
-# Database (بعداً از Neon میگیریم)
+# Database (will get from Neon later)
 DATABASE_URL=postgresql://user:pass@host/database
 
 # JWT Secret
@@ -77,27 +77,27 @@ HONOR_MODE_SOCIAL=true
 ```
 
 ### 4. Database Setup (Neon):
-1. برو به: https://neon.tech
-2. Sign up با GitHub
+1. Go to: https://neon.tech
+2. Sign up with GitHub
 3. Create new project: `analyzer-production`
 4. Database name: `analyzer`
 5. Copy connection string
-6. در Vercel settings، `DATABASE_URL` رو update کن
+6. In Vercel settings, update `DATABASE_URL`
 
-## مرحله 3: First Deployment Test
+## Step 3: First Deployment Test
 
 ### 1. Deploy:
-1. در Vercel، "Deploy" رو کلیک کن
-2. منتظر build process بمون (~2-3 دقیقه)
-3. اگر موفق بود، یه URL میگیری مثل: `https://analyzer-miniapp.vercel.app`
+1. In Vercel, click "Deploy"
+2. Wait for build process (~2-3 minutes)
+3. If successful, you'll get a URL like: `https://analyzer-miniapp.vercel.app`
 
 ### 2. Database Migration:
 ```powershell
-# روی لوکال با production DATABASE_URL:
-# اول .env.production بساز:
+# On local with production DATABASE_URL:
+# First create .env.production:
 echo "DATABASE_URL=your-neon-connection-string" > apps/web/.env.production
 
-# Migration اجرا کن:
+# Run migration:
 cd apps/web
 npx prisma migrate deploy --schema=./prisma/schema.prisma
 npx prisma db seed --schema=./prisma/schema.prisma
@@ -105,11 +105,11 @@ npx prisma db seed --schema=./prisma/schema.prisma
 
 ### 3. Telegram Webhook:
 ```powershell
-# Bot webhook رو به Vercel point کن:
+# Point bot webhook to Vercel:
 curl "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=https://your-project.vercel.app/api/telegram"
 ```
 
-## ✅ Check List:
+## ✅ Checklist:
 - [ ] GitHub repository created
 - [ ] Code pushed to GitHub  
 - [ ] Vercel project imported
@@ -119,10 +119,10 @@ curl "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=https://your-p
 - [ ] Database migrated
 - [ ] Telegram webhook set
 
-## بعد از موفقیت:
-- 🎉 Mini App live میشه!
-- 📱 Telegram bot کار می‌کنه
-- 💾 Database connected هست  
-- 🔄 Auto-deployment setup شده
+## After Success:
+- 🎉 Mini App goes live!
+- 📱 Telegram bot works
+- 💾 Database connected  
+- 🔄 Auto-deployment setup
 
-**هر تغییر در GitHub = Automatic deploy!** 🚀
+**Every GitHub change = Automatic deploy!** 🚀
