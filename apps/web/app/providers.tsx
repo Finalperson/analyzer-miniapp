@@ -1,30 +1,53 @@
 'use client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { WagmiProvider } from 'wagmi';
-import { config } from '../lib/wagmi';
-import { ReactNode, useMemo } from 'react';
+import { ReactNode, useMemo, useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 
-// Prevent SSR for wallet components
-const WagmiProviderSSR = dynamic(
-  () => Promise.resolve(WagmiProvider),
-  { ssr: false }
+// Completely disable Wagmi on server-side
+const WagmiWrapper = dynamic(
+  async () => {
+    const { WagmiProvider } = await import('wagmi');
+    const { config } = await import('../lib/wagmi');
+    
+    return function WagmiWrapperComponent({ children }: { children: ReactNode }) {
+      return <WagmiProvider config={config}>{children}</WagmiProvider>;
+    };
+  },
+  { 
+    ssr: false,
+    loading: () => <div>Loading...</div>
+  }
 );
 
 export default function Providers({ children }: { children: ReactNode }) {
+  const [mounted, setMounted] = useState(false);
+  
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const client = useMemo(() => new QueryClient({
     defaultOptions: {
       queries: {
-        staleTime: 1000 * 60 * 5, // 5 minutes
+        staleTime: 1000 * 60 * 5,
+        retry: false,
       },
     },
   }), []);
   
-  return (
-    <WagmiProviderSSR config={config}>
+  if (!mounted) {
+    return (
       <QueryClientProvider client={client}>
         {children}
       </QueryClientProvider>
-    </WagmiProviderSSR>
+    );
+  }
+  
+  return (
+    <WagmiWrapper>
+      <QueryClientProvider client={client}>
+        {children}
+      </QueryClientProvider>
+    </WagmiWrapper>
   );
 }
