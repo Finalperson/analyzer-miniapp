@@ -1,0 +1,98 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Use same models as API to share the database
+enum AdminRole {
+  SUPER_ADMIN
+  ADMIN
+}
+
+model User {
+  id              String   @id @default(cuid())
+  telegramId      BigInt   @unique
+  username        String?  @db.VarChar(64)
+  firstName       String?  @db.VarChar(64)
+  lastName        String?  @db.VarChar(64)
+  isPremium       Boolean  @default(false)
+  apBalance       Int      @default(0)
+  referralCode    String   @unique @db.VarChar(16)
+  loyaltyAwardedAt DateTime?
+  walletAddress   String?  @db.VarChar(42)
+  twitterUsername String?  @db.VarChar(64)
+  discordUsername String?  @db.VarChar(64)
+  referrerId      BigInt?
+  lastDailyClaim  DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  referrals       Referral[] @relation("UserReferrals")
+  referredBy      Referral?  @relation("UserReferees")
+  subscription    Subscription?
+  missions        UserMission[]
+  missionsLog     MissionsLog[]
+}
+
+model Referral {
+  id         String   @id @default(cuid())
+  referrerId String
+  refereeId  String   @unique
+  createdAt  DateTime @default(now())
+  referrer   User     @relation(name: "UserReferrals", fields: [referrerId], references: [id])
+  referee    User     @relation(name: "UserReferees", fields: [refereeId], references: [id])
+}
+
+model Subscription {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  plan      String   @default("monthly")
+  status    String   @default("inactive")
+  isActive  Boolean  @default(false)
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model Mission {
+  id           String  @id @default(cuid())
+  code         String  @unique
+  title        String
+  points       Int
+  type         String
+  active       Boolean @default(true)
+  userMissions UserMission[]
+}
+
+model UserMission {
+  id          String   @id @default(cuid())
+  userId      String
+  missionId   String
+  completed   Boolean  @default(false)
+  completedAt DateTime?
+  dayKey      String?  @db.VarChar(16)
+  user        User     @relation(fields: [userId], references: [id])
+  mission     Mission  @relation(fields: [missionId], references: [id])
+  @@unique([userId, missionId, dayKey])
+}
+
+model MissionsLog {
+  logId       String   @id @default(cuid())
+  userId      BigInt
+  missionId   String
+  completedAt DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [telegramId])
+}
+
+model Admin {
+  id            String    @id @default(cuid())
+  walletAddress String    @unique @db.VarChar(42)
+  role          AdminRole @default(ADMIN)
+  nonce         String?   @db.VarChar(64)
+  nonceExpiresAt DateTime?
+  createdAt     DateTime  @default(now())
+}

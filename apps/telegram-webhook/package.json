@@ -1,0 +1,26 @@
+{
+  "name": "@analyzer/telegram-webhook",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone Vercel serverless function for Analyzer Telegram bot webhook",
+  "scripts": {
+    "postinstall": "prisma generate",
+    "db:migrate": "prisma migrate deploy --schema=./prisma/schema.prisma",
+    "db:dev": "prisma migrate dev --name init --schema=./prisma/schema.prisma",
+    "db:seed": "node --loader tsx ./prisma/seed.ts"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0",
+    "prisma": "^5.22.0",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.8.6"
+  },
+  "prisma": {
+    "schema": "./prisma/schema.prisma"
+  }
+}

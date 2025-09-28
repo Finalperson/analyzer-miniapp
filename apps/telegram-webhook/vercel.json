@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "functions": {
+    "api/telegram.ts": {
+      "runtime": "nodejs20.x"
+    }
+  },
+  "env": {
+    "TELEGRAM_BOT_TOKEN": "@telegram-bot-token",
+    "PUBLIC_WEBAPP_URL": "@public-webapp-url",
+    "DATABASE_URL": "@database-url"
+  }
+}

@@ -106,7 +106,25 @@ npx prisma db seed --schema=./prisma/schema.prisma
 ### 3. Telegram Webhook:
 ```powershell
 # Point bot webhook to Vercel:
-curl "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=https://your-project.vercel.app/api/telegram"
+curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<APP>.vercel.app/api/telegram"
+```
+
+## Alternative: Bot-only Deploy (no web)
+If you only need the bot, deploy the standalone package at `apps/telegram-webhook` to a separate Vercel project.
+
+Project settings:
+- Framework preset: Other
+- Root directory: apps/telegram-webhook
+- Build command: (none)
+- Output directory: (none)
+- Functions: will auto-detect `api/telegram.ts`
+
+Environment Variables:
+- TELEGRAM_BOT_TOKEN
+- PUBLIC_WEBAPP_URL (optional)
+- DATABASE_URL (if you later add DB access to the function)
+
+Then set the Telegram webhook to `https://<your-project>.vercel.app/api/telegram`.
 ```
 
 ## ✅ Checklist:
